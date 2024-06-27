@@ -40,9 +40,6 @@ static void defaultInlinerOptPipeline(OpPassManager &pm) {
 // Return true if the inlining ratio does not exceed the threshold.
 static bool isProfitableToInline(const Inliner::ResolvedCall &resolvedCall,
                                  unsigned inliningThreshold) {
-
-  return resolvedCall.call->hasAttr("inline");
-
   // Return early, ratio <= 0U will always be false.
   if (inliningThreshold == 0U)
     return false;
@@ -231,4 +228,13 @@ std::unique_ptr<Pass> mlir::createInlinerPass(
     std::function<void(OpPassManager &)> defaultPipelineBuilder) {
   return std::make_unique<InlinerPass>(std::move(defaultPipelineBuilder),
                                        std::move(opPipelines));
+}
+std::unique_ptr<Pass> mlir::createInlinerPass(
+  llvm::StringMap<OpPassManager> opPipelines,
+  std::function<void(OpPassManager &)> defaultPipelineBuilder,
+  std::function<bool(Inliner::ResolvedCall &)> profitabilityCallback) {
+  return std::make_unique<InlinerPass>(std::move(defaultPipelineBuilder),
+                                       std::move(opPipelines),
+                                       std::move(profitabilityCallback));
+
 }

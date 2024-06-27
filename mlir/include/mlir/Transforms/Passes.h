@@ -18,6 +18,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 #include "mlir/Transforms/ViewOpGraph.h"
+#include "mlir/Transforms/Inliner.h"
 #include "llvm/Support/Debug.h"
 #include <limits>
 #include <memory>
@@ -110,6 +111,14 @@ createInlinerPass(llvm::StringMap<OpPassManager> opPipelines);
 std::unique_ptr<Pass>
 createInlinerPass(llvm::StringMap<OpPassManager> opPipelines,
                   std::function<void(OpPassManager &)> defaultPipelineBuilder);
+/// Creates an instance of the inliner pass, and use the provided pass managers
+/// when optimizing callable operations with names matching the key type.
+/// Callable operations with a name not within the provided map will use the
+/// provided default pipeline builder.
+std::unique_ptr<Pass> createInlinerPass(
+    llvm::StringMap<OpPassManager> opPipelines,
+    std::function<void(OpPassManager &)> defaultPipelineBuilder,
+    std::function<void(Inliner::ResolvedCall &)> profitabilityCallback);
 
 /// Creates an optimization pass to remove dead values.
 std::unique_ptr<Pass> createRemoveDeadValuesPass();
