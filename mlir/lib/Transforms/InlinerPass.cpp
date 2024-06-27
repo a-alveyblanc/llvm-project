@@ -28,68 +28,13 @@ namespace mlir {
 
 using namespace mlir;
 
+//===----------------------------------------------------------------------===//
+// Utility functions
+//===----------------------------------------------------------------------===//
+
 /// This function implements the inliner optimization pipeline.
 static void defaultInlinerOptPipeline(OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
-}
-
-//===----------------------------------------------------------------------===//
-// InlinerPass
-//===----------------------------------------------------------------------===//
-
-namespace {
-class InlinerPass : public impl::InlinerBase<InlinerPass> {
-public:
-  InlinerPass();
-  InlinerPass(const InlinerPass &) = default;
-  InlinerPass(std::function<void(OpPassManager &)> defaultPipeline);
-  InlinerPass(std::function<void(OpPassManager &)> defaultPipeline,
-              llvm::StringMap<OpPassManager> opPipelines);
-  void runOnOperation() override;
-
-  /// A callback provided to the inliner driver to execute
-  /// the specified pass pipeline on the given operation
-  /// within the context of the current inliner pass,
-  /// which is passed as the first argument.
-  /// runPipeline API is protected within the Pass class,
-  /// so this helper is required to call it from the foreign
-  /// inliner driver.
-  static LogicalResult runPipelineHelper(Pass &pass, OpPassManager &pipeline,
-                                         Operation *op) {
-    return mlir::cast<InlinerPass>(pass).runPipeline(pipeline, op);
-  }
-
-private:
-  /// Attempt to initialize the options of this pass from the given string.
-  /// Derived classes may override this method to hook into the point at which
-  /// options are initialized, but should generally always invoke this base
-  /// class variant.
-  LogicalResult initializeOptions(
-      StringRef options,
-      function_ref<LogicalResult(const Twine &)> errorHandler) override;
-
-  /// Inliner configuration parameters created from the pass options.
-  InlinerConfig config;
-};
-} // namespace
-
-InlinerPass::InlinerPass() : InlinerPass(defaultInlinerOptPipeline) {}
-
-InlinerPass::InlinerPass(
-    std::function<void(OpPassManager &)> defaultPipelineArg)
-    : InlinerPass(std::move(defaultPipelineArg),
-                  llvm::StringMap<OpPassManager>{}) {}
-
-InlinerPass::InlinerPass(std::function<void(OpPassManager &)> defaultPipeline,
-                         llvm::StringMap<OpPassManager> opPipelines)
-    : config(std::move(defaultPipeline), maxInliningIterations) {
-  if (opPipelines.empty())
-    return;
-
-  // Update the option for the op specific optimization pipelines.
-  for (auto &it : opPipelines)
-    opPipelineList.addValue(it.second);
-  config.setOpPipelines(std::move(opPipelines));
 }
 
 // Return true if the inlining ratio does not exceed the threshold.
@@ -123,6 +68,93 @@ static bool isProfitableToInline(const Inliner::ResolvedCall &resolvedCall,
   LLVM_DEBUG(llvm::dbgs() << "Callee / caller operation ratio (max: "
                           << inliningThreshold << "%): " << ratio << "%\n");
   return ratio <= inliningThreshold;
+}
+
+//===----------------------------------------------------------------------===//
+// InlinerPass
+//===----------------------------------------------------------------------===//
+
+namespace {
+class InlinerPass : public impl::InlinerBase<InlinerPass> {
+public:
+  InlinerPass();
+  InlinerPass(const InlinerPass &) = default;
+  InlinerPass(std::function<void(OpPassManager &)> defaultPipeline);
+  InlinerPass(std::function<void(OpPassManager &)> defaultPipeline,
+              llvm::StringMap<OpPassManager> opPipelines);
+  InlinerPass(
+      std::function<void(OpPassManager &)> defaultPipeline,
+      llvm::StringMap<OpPassManager> opPipelines,
+      std::function<bool(Inliner::ResolvedCall &)> profitabilityCallback);
+  void runOnOperation() override;
+
+  /// A callback provided to the inliner driver to execute
+  /// the specified pass pipeline on the given operation
+  /// within the context of the current inliner pass,
+  /// which is passed as the first argument.
+  /// runPipeline API is protected within the Pass class,
+  /// so this helper is required to call it from the foreign
+  /// inliner driver.
+  static LogicalResult runPipelineHelper(Pass &pass, OpPassManager &pipeline,
+                                         Operation *op) {
+    return mlir::cast<InlinerPass>(pass).runPipeline(pipeline, op);
+  }
+
+private:
+  /// Attempt to initialize the options of this pass from the given string.
+  /// Derived classes may override this method to hook into the point at which
+  /// options are initialized, but should generally always invoke this base
+  /// class variant.
+  LogicalResult initializeOptions(
+      StringRef options,
+      function_ref<LogicalResult(const Twine &)> errorHandler) override;
+
+  /// Inliner configuration parameters created from the pass options.
+  InlinerConfig config;
+
+  /// A callback provided to the inliner driver to determine whether or not it
+  /// is profitable to inline a given operaiton.
+  std::function<bool(Inliner::ResolvedCall &)> costModel;
+};
+} // namespace
+
+InlinerPass::InlinerPass() : InlinerPass(defaultInlinerOptPipeline) {}
+
+InlinerPass::InlinerPass(
+    std::function<void(OpPassManager &)> defaultPipelineArg)
+    : InlinerPass(std::move(defaultPipelineArg),
+                  llvm::StringMap<OpPassManager>{}) {
+  // default cost model
+  costModel = [=](Inliner::ResolvedCall &resolvedCall) {
+    return isProfitableToInline(resolvedCall, maxInliningIterations);
+  };
+}
+
+InlinerPass::InlinerPass(std::function<void(OpPassManager &)> defaultPipeline,
+                         llvm::StringMap<OpPassManager> opPipelines)
+    : config(std::move(defaultPipeline), maxInliningIterations) {
+  if (opPipelines.empty())
+    return;
+
+  // Update the option for the op specific optimization pipelines.
+  for (auto &it : opPipelines)
+    opPipelineList.addValue(it.second);
+  config.setOpPipelines(std::move(opPipelines));
+}
+
+InlinerPass::InlinerPass(
+    std::function<void(OpPassManager &)> defaultPipeline,
+    llvm::StringMap<OpPassManager> opPipelines,
+    std::function<bool(Inliner::ResolvedCall &)> profitabilityCallback)
+    : config(std::move(defaultPipeline), maxInliningIterations),
+      costModel(std::move(profitabilityCallback)) {
+  if (opPipelines.empty())
+    return;
+
+  // Update the option for the op specific optimization pipelines.
+  for (auto &it : opPipelines)
+    opPipelineList.addValue(it.second);
+  config.setOpPipelines(std::move(opPipelines));
 }
 
 void InlinerPass::runOnOperation() {
