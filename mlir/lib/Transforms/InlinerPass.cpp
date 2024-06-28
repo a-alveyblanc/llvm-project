@@ -95,6 +95,9 @@ InlinerPass::InlinerPass(std::function<void(OpPassManager &)> defaultPipeline,
 // Return true if the inlining ratio does not exceed the threshold.
 static bool isProfitableToInline(const Inliner::ResolvedCall &resolvedCall,
                                  unsigned inliningThreshold) {
+
+  return resolvedCall.call->hasAttr("inline");
+
   // Return early, ratio <= 0U will always be false.
   if (inliningThreshold == 0U)
     return false;
